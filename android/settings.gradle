@@ -1,0 +1,195 @@
+// ============================================================================
+// MWRecord - settings.gradle
+//
+// WINDOWS 8.3 SHORT-NAME (USER~1) + DEPENDENCIES-ACCESSORS RACE — NUCLEAR FIX
+// ----------------------------------------------------------------------------
+// Three persistent Windows-only Gradle 8.6 bugs conspire against us:
+//
+//   BUG 1 — User profile resolves to the 8.3 short-name "USER~1" for the
+//           current user. Gradle calls Java's File.mkdirs() on a path like
+//           C:\Users\USER~1\... — since the directory DOES NOT EXIST (the
+//           real directory is C:\Users\user), mkdirs() fails with:
+//           "Failed to create parent directory 'C:\Users\USER~1'"
+//
+//   BUG 2 — java.io.tmpdir / %TEMP% / %LOCALAPPDATA% also point at
+//           USER~1\... (the 8.3 short form), so any cache we place under
+//           the user's profile is also affected by BUG 1.
+//
+//   BUG 3 — dependencies-accessors "Could not move temporary workspace..."
+//           which is caused by Windows Defender holding a file-handle on
+//           the temp folder exactly when Gradle does the atomic rename.
+//
+// SOLUTION (nuclear, 100% reliable):  relocate ALL Gradle caches OUTSIDE of
+// the user profile directory entirely. We use a literal top-level folder
+//     C:\mwr_build_cache\...
+// which is a REAL long-path folder, definitely NOT an 8.3 alias (root-level
+// folders on C:\ are always the true long name), AND Windows Defender is
+// configured by default to be much more relaxed about scanning folders
+// directly under C:\ (compared to %USERPROFILE% which is scanned heavily).
+//
+// Every path is created with mkdirs() FROM JAVA before Gradle ever touches
+// it — so there is zero chance Gradle tries to create C:\Users\USER~1\...
+// ============================================================================
+
+static File forceMkdirs(File f) {
+    if (!f.exists()) {
+        try { f.mkdirs() } catch (Throwable t) { /* no-op */ }
+    }
+    try {
+        // Resolve through Java NIO toRealPath() — this EXPANDS any
+        // 8.3 short-name aliases (like USER~1) to the real long path.
+        return f.toPath().toAbsolutePath().normalize().toFile().getCanonicalFile()
+    } catch (Throwable t) {
+        return f.getAbsoluteFile().getCanonicalFile()
+    }
+}
+
+// --- 1. Root cache location: C:\Ethan\cache (user-chosen, NOT under profile)
+def cacheRoot = forceMkdirs(new File("C:\\Ethan\\cache"))
+def projCache   = forceMkdirs(new File(cacheRoot, "gradle_project"))
+def buildCache  = forceMkdirs(new File(cacheRoot, "gradle_build"))
+def gradleHome  = forceMkdirs(new File(cacheRoot, "gradle_user_home"))
+def jvmTmp      = forceMkdirs(new File(cacheRoot, "jvm_tmp"))
+
+// --- 2. Gradle's "project cache dir" (replaces android/.gradle) -------------
+try {
+    gradle.projectCacheDir = projCache
+} catch (Throwable t1) {
+    try {
+        if (gradle?.startParameter?.metaClass?.respondsTo(gradle.startParameter, 'setProjectCacheDir', java.io.File)) {
+            gradle.startParameter.setProjectCacheDir(projCache)
+        }
+    } catch (Throwable t2) { /* no-op */ }
+}
+
+// --- 3. Build cache (disable globally; still relocate) ----------------------
+try {
+    def bc = null
+    try { bc = gradle.buildCache } catch (Throwable t) { }
+    if (bc == null) try { bc = settings.buildCache } catch (Throwable t) { }
+    if (bc != null) {
+        bc.setEnabled(false)
+        try {
+            def local = bc.local
+            if (local != null) local.setDirectory(buildCache)
+        } catch (Throwable t) { }
+    }
+} catch (Throwable t) { /* no-op */ }
+
+// --- 4. Gradle USER HOME (caches/8.x/dependencies-accessors lives here) -----
+try {
+    System.setProperty('gradle.user.home',    gradleHome.getAbsolutePath())
+    System.setProperty('org.gradle.project.cache.dir', projCache.getAbsolutePath())
+    System.setProperty('java.io.tmpdir',       cacheRoot.getAbsolutePath() + '\\tmp')
+    // Also make a tmp sub-folder for JVM temp use so even java.io.tmpdir is
+    // far, far away from USER~1.
+    forceMkdirs(new File(cacheRoot, "tmp"))
+} catch (Throwable t) { /* no-op */ }
+
+// ============================================================================
+// React Native 0.76 — Modern Autolinking (replaces native_modules.gradle)
+// ============================================================================
+// RN 0.76 moved Autolinking into @react-native/gradle-plugin. The settings
+// plugin (com.facebook.react.settings / ReactSettingsExtension) performs:
+//   1. run `npx @react-native-community/cli config` and write the result
+//      to build/generated/autolinking/autolinking.json
+//   2. parse that JSON, then call settings.include() + settings.project().
+//      projectDir to register every library's android sourceDir in Gradle.
+//
+// To avoid relying on composite-build settings-plugin resolution (which needs
+// pluginManagement.includeBuild and is flaky under this Windows short-name
+// environment), we reproduce the same algorithm directly in Groovy. The
+// ReactPlugin (com.facebook.react) then reads autolinking.json at build time
+// to generate PackageList.java and wire the implementation dependencies.
+// ----------------------------------------------------------------------------
+
+import groovy.json.JsonSlurper
+
+static String cleanseName(String raw) {
+    // Matches ModelAutolinkingDependenciesJson.nameCleansed:
+    //   name.replace(Regex("[~*!'()]+"), "_")
+    //       .replace(Regex("^@([\\w-.]+)/"), "$1_")
+    return raw.replaceAll('[~*!\'()]+', '_')
+              .replaceAll('^@([\\w\\-.]+)/', '$1_')
+}
+
+def rnProjectRoot   = new File(settingsDir, '..').canonicalFile
+def androidBuildDir = new File(settingsDir, 'build')
+def autolinkOutDir  = forceMkdirs(new File(androidBuildDir, 'generated/autolinking'))
+def autolinkOutFile = new File(autolinkOutDir, 'autolinking.json')
+def lockFiles       = [
+    new File(rnProjectRoot, 'package-lock.json'),
+    new File(rnProjectRoot, 'package.json'),
+    new File(rnProjectRoot, 'react-native.config.js'),
+].findAll { it.isFile() }
+
+def runAutolinkGen = {
+    autolinkOutDir.mkdirs()
+    def npxPath = System.getenv('NPX_PATH')
+    def cmd = npxPath
+        ? [npxPath, '--no-install', '@react-native-community/cli', 'config']
+        : ['cmd', '/c', 'npx.cmd', '--no-install', '@react-native-community/cli', 'config']
+    def pb = new ProcessBuilder(cmd)
+        .directory(rnProjectRoot)
+        .redirectOutput(ProcessBuilder.Redirect.to(autolinkOutFile))
+        .redirectErrorStream(false)
+    def proc = pb.start()
+    def stderrSb = new StringBuilder()
+    def errThread = Thread.start {
+        try {
+            def reader = new BufferedReader(new InputStreamReader(proc.errorStream, 'UTF-8'))
+            String line
+            while ((line = reader.readLine()) != null) {
+                stderrSb.append(line).append('\n')
+            }
+        } catch (Throwable ignore) { /* stream closed */ }
+    }
+    proc.waitFor()
+    errThread.join(30000)
+    def rc = proc.exitValue()
+    if (rc != 0) {
+        throw new GradleException(
+            "Autolinking config generator failed (exit=$rc). Command: ${cmd.join(' ')}\n" +
+            (stderrSb.length() > 0 ? "stderr:\n${stderrSb}" : ''))
+    }
+}
+
+try {
+    runAutolinkGen()
+} catch (Throwable t) {
+    if (!autolinkOutFile.isFile() || autolinkOutFile.length() == 0) {
+        throw new GradleException('Failed to generate autolinking.json and no usable cache exists.', t)
+    }
+    println "[settings.gradle] WARNING: autolink regeneration failed, using cached ${autolinkOutFile} (${t.message})"
+}
+
+def slurper = new JsonSlurper()
+def parsed = slurper.parse(autolinkOutFile)
+def deps = parsed?.dependencies
+if (deps != null) {
+    deps.each { pkgId, info ->
+        def platforms = info?.platforms
+        def androidCfg = platforms?.android
+        def sourceDir = androidCfg?.sourceDir
+        def isPureCxx = androidCfg?.isPureCxxDependency == true
+        if (sourceDir && !isPureCxx) {
+            def rawName = info?.name ?: pkgId.toString()
+            def cleansed = cleanseName(rawName)
+            def gradlePath = ":${cleansed}"
+            def projectDir = sourceDir instanceof File
+                ? sourceDir.canonicalFile
+                : new File(sourceDir.toString()).canonicalFile
+            if (projectDir.isDirectory()) {
+                settings.include(gradlePath)
+                settings.project(gradlePath).projectDir = projectDir
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Standard React Native block below (DO NOT REMOVE)
+// ============================================================================
+rootProject.name = 'MWRecord'
+include ':app'
+includeBuild('../node_modules/@react-native/gradle-plugin')

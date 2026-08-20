@@ -1,0 +1,183 @@
+// retry-accessors-simple.gradle — minimal Gradle init script hook.
+// COMPATIBILITY NOTE: this file is compiled by Gradle's embedded Groovy which
+// is sensitive to metaClass, ternary expressions without parens and
+// non-trivial closures. Keep everything as simple "Java-style" loops +
+// try/catch blocks, no GString interpolation inside closures, no
+// metaClass.respondsTo() calls.
+
+static boolean matchesBug(Throwable t) {
+    if (t == null) return false
+    Set seen = new HashSet()
+    List stack = new ArrayList()
+    stack.add(t)
+    while (!stack.isEmpty()) {
+        Object curObj = stack.remove(0)
+        if (curObj == null) continue
+        if (!(curObj instanceof Throwable)) continue
+        Throwable cur = (Throwable) curObj
+        if (seen.contains(cur)) continue
+        seen.add(cur)
+        String msg = null
+        try {
+            msg = cur.getMessage()
+        } catch (Throwable ignored) {
+            msg = null
+        }
+        if (msg != null) {
+            String s = msg.toString()
+            if (s.indexOf('move temporary workspace') >= 0 && s.indexOf('dependencies-accessors') >= 0) {
+                return true
+            }
+        }
+        try {
+            Throwable cause = cur.getCause()
+            if (cause != null) stack.add(cause)
+        } catch (Throwable ignored) { /* no-op */ }
+        try {
+            Throwable[] suppressed = cur.getSuppressed()
+            if (suppressed != null) {
+                for (int i = 0; i < suppressed.length; i++) {
+                    if (suppressed[i] != null) stack.add(suppressed[i])
+                }
+            }
+        } catch (Throwable ignored) { /* no-op */ }
+    }
+    return false
+}
+
+static void deleteOne(File f) {
+    if (f == null || !f.exists()) return
+    try {
+        if (f.isDirectory()) {
+            try {
+                File[] kids = f.listFiles()
+                if (kids != null) {
+                    for (int i = 0; i < kids.length; i++) {
+                        deleteOne(kids[i])
+                    }
+                }
+            } catch (Throwable ignored) { /* no-op */ }
+        }
+        f.delete()
+    } catch (Throwable ignored) { /* no-op */ }
+}
+
+static void scanAndDelete(File rootDir) {
+    if (rootDir == null || !rootDir.exists()) return
+    try {
+        File[] kids = rootDir.listFiles()
+        if (kids == null) return
+        for (int i = 0; i < kids.length; i++) {
+            File k = kids[i]
+            if (k == null) continue
+            if (k.isDirectory()) {
+                if ("dependencies-accessors".equals(k.getName())) {
+                    File[] items = k.listFiles()
+                    if (items != null) {
+                        for (int j = 0; j < items.length; j++) {
+                            deleteOne(items[j])
+                        }
+                    }
+                } else {
+                    scanAndDelete(k)
+                }
+            }
+        }
+    } catch (Throwable ignored) { /* no-op */ }
+}
+
+static void cleanupAccessorCaches(File projectRoot) {
+    // 1) project-local android/.gradle (legacy fallback path Gradle still
+    //    sometimes writes to even when project cache is relocated)
+    scanAndDelete(new File(projectRoot, ".gradle"))
+    // 2) gradle user home caches. Respects env:GRADLE_USER_HOME (set by
+    //    build-android.ps1) via the "gradle.user.home" system property, or
+    //    falls back to ~/.gradle.
+    String guh = System.getProperty("gradle.user.home")
+    if (guh == null || guh.length() == 0) {
+        guh = new File(System.getProperty("user.home"), ".gradle").getAbsolutePath()
+    }
+    scanAndDelete(new File(guh, "caches"))
+    // 3) explicit project-cache-dir / build-cache-dir if set in gradle.properties
+    try {
+        Properties p = new Properties()
+        File localProps = new File(projectRoot, "gradle.properties")
+        if (localProps.exists()) {
+            FileInputStream fis = null
+            try {
+                fis = new FileInputStream(localProps)
+                p.load(fis)
+            } finally {
+                if (fis != null) try { fis.close() } catch (Throwable ig) {}
+            }
+            // Gradle 8.6 accepts TWO spellings here (dot-form / CLI dashed
+            // form). We read BOTH just in case.
+            String pcd = p.getProperty("org.gradle.project.cache.dir")
+            if (pcd == null || pcd.length() == 0) {
+                pcd = p.getProperty("org.gradle.project-cache-dir")
+            }
+            if (pcd != null && pcd.length() > 0) {
+                scanAndDelete(new File(pcd))
+            }
+            String bcd = p.getProperty("org.gradle.build-cache.dir")
+            if (bcd == null || bcd.length() == 0) {
+                bcd = p.getProperty("org.gradle.build-cache-dir")
+            }
+            if (bcd != null && bcd.length() > 0) {
+                scanAndDelete(new File(bcd))
+            }
+        }
+    } catch (Throwable ignored) { /* no-op */ }
+    // 4) Safety net: also scan java.io.tmpdir for any MWRecord caches.
+    //    build-android.ps1 always puts caches under %TEMP%/mwr_*, so this
+    //    catches the "properties not read" failure mode too.
+    try {
+        File tmp = new File(System.getProperty("java.io.tmpdir"))
+        if (tmp.exists()) {
+            File[] top = tmp.listFiles()
+            if (top != null) {
+                for (int i = 0; i < top.length; i++) {
+                    File f = top[i]
+                    if (f != null && f.isDirectory()) {
+                        String n = f.getName()
+                        if (n != null && (n.startsWith("mwr_gradle_") || n.startsWith("mwr_build_"))) {
+                            scanAndDelete(f)
+                        }
+                    }
+                }
+            }
+        }
+    } catch (Throwable ignored) { /* no-op */ }
+}
+
+gradle.buildFinished { result ->
+    Throwable failure = null
+    try {
+        if (result != null && result.metaClass.respondsTo(result, "getFailure")) {
+            failure = result.getFailure()
+        }
+    } catch (Throwable ignored) {
+        failure = null
+    }
+    if (failure != null && matchesBug(failure)) {
+        println ""
+        println "=================================================================="
+        println "[retry-hook] DETECTED dependencies-accessors move bug."
+        println "[retry-hook] Cleaning up broken accessor caches for next attempt."
+        println "=================================================================="
+        try { System.gc() } catch (Throwable ignored) {}
+        try { Thread.sleep(500L) } catch (InterruptedException ie) { Thread.currentThread().interrupt() }
+        File root = null
+        try { root = gradle.getRootProject().getProjectDir() } catch (Throwable ignored) { root = null }
+        if (root == null) {
+            try { root = gradle.getStartParameter().getCurrentDir() } catch (Throwable ignored) { root = null }
+        }
+        if (root != null) {
+            try { cleanupAccessorCaches(root) } catch (Throwable t) {
+                println "[retry-hook] cleanup warning (non-fatal): " + t.toString()
+            }
+        }
+        println "[retry-hook] Cache cleanup done. Next build attempt should be clean."
+        println ""
+    }
+}

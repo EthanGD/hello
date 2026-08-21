@@ -49,3 +49,69 @@ export const getFileExtension = (uri: string): string => {
   const match = clean.match(/\.([a-zA-Z0-9]+)$/);
   return match ? match[1].toLowerCase() : 'jpg';
 };
+
+export interface UiFriendlyPath {
+  primary: string;
+  secondary: string;
+  storageLabel: string;
+}
+
+const EXTERNAL_STORAGE_ROOT = '/storage/emulated/0';
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export const toUiFriendlyPath = (absolutePath: string): UiFriendlyPath => {
+  const abs = (absolutePath || '').trim();
+  const storageLabel = '內部存儲';
+  if (!abs) {
+    return {primary: '-', secondary: '-', storageLabel};
+  }
+  const isExtRoot =
+    abs === EXTERNAL_STORAGE_ROOT ||
+    abs.startsWith(EXTERNAL_STORAGE_ROOT + '/') ||
+    abs.startsWith(EXTERNAL_STORAGE_ROOT + '\\');
+  if (!isExtRoot) {
+    return {primary: abs, secondary: abs, storageLabel};
+  }
+  const suffix = abs
+    .slice(EXTERNAL_STORAGE_ROOT.length)
+    .replace(/^[\\/]+/, '')
+    .replace(/\\/g, '/');
+  if (!suffix) {
+    return {primary: storageLabel, secondary: abs, storageLabel};
+  }
+  const parts = suffix.split('/').filter(Boolean);
+  const visibleParts: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    visibleParts.push(p);
+  }
+  const friendlyTail = visibleParts.join(' › ');
+  const primary = friendlyTail
+    ? `${storageLabel} › ${friendlyTail}`
+    : storageLabel;
+  return {primary, secondary: abs, storageLabel};
+};
+
+export const highlightSubDirInFriendly = (
+  friendly: string,
+  subDirName: string | null | undefined,
+): string => {
+  if (!subDirName) return friendly;
+  const needle = ` › ${subDirName}`;
+  if (friendly.endsWith(needle)) return friendly;
+  const sub = String(subDirName).trim();
+  if (!sub) return friendly;
+  return `${friendly} › ${sub}`;
+};
+
+export const tryLocateExternalStoragePrefixLabel = (abs: string): string => {
+  const a = (abs || '').replace(/\\/g, '/');
+  if (a.startsWith('/storage/emulated/0')) return '內部存儲';
+  if (a.startsWith('/sdcard')) return 'SD 卡 (已模擬)';
+  return '存儲';
+};
+
+export {escapeRegex as _escapeRegexForPath};

@@ -1,4 +1,4 @@
-﻿import React, {useCallback, useEffect, useMemo, useState} from 'react';
+﻿import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -24,19 +24,12 @@ export interface LocationParts {
 
 export interface LocationFieldProps {
   value: string;
+  areaValue?: string;
+  parishValue?: string;
+  streetValue?: string;
+  houseNumberValue?: string;
   onChange: (fullValue: string, parts: LocationParts) => void;
 }
-
-const HOUSE_SPLIT_REGEX =
-  /^(.*?)((?:\d+(?:[-–—~到至]\d+)?(?:號|號地下|號\S*)|地下\S*|樓\S*|舖\S*|閣\S*|座\S*)$)/u;
-
-const splitStreetAndHouse = (input: string): {street: string; house: string} => {
-  const s = input || '';
-  if (!s) return {street: '', house: ''};
-  const m = s.match(HOUSE_SPLIT_REGEX);
-  if (!m) return {street: s, house: ''};
-  return {street: m[1] || '', house: m[2] || ''};
-};
 
 const splitFullLocationToParts = (
   full: string,
@@ -68,8 +61,8 @@ const splitFullLocationToParts = (
     }
   }
 
-  const {street, house} = splitStreetAndHouse(rest);
-  return {area, parish, street, houseNumber: house};
+  const street = rest.trim();
+  return {area, parish, street, houseNumber: ''};
 };
 
 const filterChips = (
@@ -109,7 +102,14 @@ const SECTION_LABELS: Array<{
   },
 ];
 
-export const LocationField: React.FC<LocationFieldProps> = ({value, onChange}) => {
+export const LocationField: React.FC<LocationFieldProps> = ({
+  value,
+  areaValue,
+  parishValue,
+  streetValue,
+  houseNumberValue,
+  onChange,
+}) => {
   const {
     state: {locationAreas, locationParishes, locationStreets},
     addLocationArea,
@@ -117,11 +117,33 @@ export const LocationField: React.FC<LocationFieldProps> = ({value, onChange}) =
     addLocationStreet,
   } = useApp();
 
-  const [parts, setParts] = useState<LocationParts>({
-    area: '',
-    parish: '',
-    street: '',
-    houseNumber: '',
+  const initialParts: LocationParts = {
+    area: String(areaValue || '').trim(),
+    parish: String(parishValue || '').trim(),
+    street: String(streetValue || '').trim(),
+    houseNumber: String(houseNumberValue || '').trim(),
+  };
+
+  const allInitialEmpty =
+    !initialParts.area &&
+    !initialParts.parish &&
+    !initialParts.street &&
+    !initialParts.houseNumber;
+
+  const [parts, setParts] = useState<LocationParts>(() => {
+    if (allInitialEmpty && value) {
+      const candidates = {
+        areas: [...DEFAULT_LOCATION_AREAS],
+        parishes: [...DEFAULT_LOCATION_PARISHES],
+      };
+      const fallback = splitFullLocationToParts(
+        value,
+        candidates.areas,
+        candidates.parishes,
+      );
+      return fallback;
+    }
+    return initialParts;
   });
   const [queries, setQueries] = useState({
     area: '',
@@ -132,30 +154,77 @@ export const LocationField: React.FC<LocationFieldProps> = ({value, onChange}) =
   const [editingKey, setEditingKey] = useState<
     'area' | 'parish' | 'street' | 'houseNumber' | null
   >(null);
+  const initialSyncKey = `${areaValue ?? ''}|${parishValue ?? ''}|${streetValue ?? ''}|${houseNumberValue ?? ''}|${value ?? ''}`;
+  const initialSyncedRef = useRef<string>('');
 
   useEffect(() => {
-    const candidates = {
-      areas: [...DEFAULT_LOCATION_AREAS, ...locationAreas],
-      parishes: [...DEFAULT_LOCATION_PARISHES, ...locationParishes],
-    };
-    const next = splitFullLocationToParts(value, candidates.areas, candidates.parishes);
-    setParts(prev => {
-      const merged: LocationParts = {...next};
-      if (editingKey === 'area') merged.area = prev.area;
-      if (editingKey === 'parish') merged.parish = prev.parish;
-      if (editingKey === 'street') merged.street = prev.street;
-      if (editingKey === 'houseNumber') merged.houseNumber = prev.houseNumber;
-      if (
-        prev.area === merged.area &&
-        prev.parish === merged.parish &&
-        prev.street === merged.street &&
-        prev.houseNumber === merged.houseNumber
-      ) {
-        return prev;
-      }
-      return merged;
-    });
-  }, [value, locationAreas, locationParishes, editingKey]);
+    const anyUserEdited =
+      editingKey !== null ||
+      String(queries.area || '').trim().length > 0 ||
+      String(queries.parish || '').trim().length > 0 ||
+      String(queries.street || '').trim().length > 0 ||
+      String(queries.houseNumber || '').trim().length > 0;
+    if (anyUserEdited) return;
+
+    if (initialSyncedRef.current === initialSyncKey) return;
+
+    const hasAnyExplicit =
+      String(areaValue || '').trim().length > 0 ||
+      String(parishValue || '').trim().length > 0 ||
+      String(streetValue || '').trim().length > 0 ||
+      String(houseNumberValue || '').trim().length > 0;
+
+    if (hasAnyExplicit) {
+      const next: LocationParts = {
+        area: String(areaValue || '').trim(),
+        parish: String(parishValue || '').trim(),
+        street: String(streetValue || '').trim(),
+        houseNumber: String(houseNumberValue || '').trim(),
+      };
+      setParts(prev => {
+        if (
+          prev.area === next.area &&
+          prev.parish === next.parish &&
+          prev.street === next.street &&
+          prev.houseNumber === next.houseNumber
+        )
+          return prev;
+        return next;
+      });
+    } else if (value) {
+      const candidates = {
+        areas: [...DEFAULT_LOCATION_AREAS, ...locationAreas],
+        parishes: [...DEFAULT_LOCATION_PARISHES, ...locationParishes],
+      };
+      const next = splitFullLocationToParts(
+        value,
+        candidates.areas,
+        candidates.parishes,
+      );
+      setParts(prev => {
+        if (
+          prev.area === next.area &&
+          prev.parish === next.parish &&
+          prev.street === next.street &&
+          prev.houseNumber === next.houseNumber
+        )
+          return prev;
+        return next;
+      });
+    }
+    initialSyncedRef.current = initialSyncKey;
+  }, [
+    initialSyncKey,
+    value,
+    areaValue,
+    parishValue,
+    streetValue,
+    houseNumberValue,
+    locationAreas,
+    locationParishes,
+    editingKey,
+    queries,
+  ]);
 
   const displayParts = useMemo<LocationParts>(() => {
     const firstNonNull = (a: string, b: string): string => (a && a.trim().length > 0 ? a : b);
@@ -172,18 +241,22 @@ export const LocationField: React.FC<LocationFieldProps> = ({value, onChange}) =
       displayParts.area +
       displayParts.parish +
       displayParts.street +
-      displayParts.houseNumber,
+      (displayParts.houseNumber ? `門牌號${displayParts.houseNumber}` : ''),
     [displayParts],
   );
 
   const remainingForStreet = useMemo(() => {
     const used = parts.area.length + parts.parish.length;
-    return Math.max(LOCATION_MAX_LENGTH - used - HOUSE_NUMBER_MAX_LENGTH, 20);
+    return Math.max(LOCATION_MAX_LENGTH - used - HOUSE_NUMBER_MAX_LENGTH - 3, 20);
   }, [parts.area, parts.parish]);
 
   const emitChange = useCallback(
     (next: LocationParts) => {
-      const full = next.area + next.parish + next.street + next.houseNumber;
+      const full =
+        next.area +
+        next.parish +
+        next.street +
+        (next.houseNumber ? `門牌號${next.houseNumber}` : '');
       onChange(full, next);
     },
     [onChange],
@@ -193,7 +266,13 @@ export const LocationField: React.FC<LocationFieldProps> = ({value, onChange}) =
     (key: keyof LocationParts, raw: string) => {
       setParts(prev => {
         const next: LocationParts = {...prev, [key]: raw};
-        emitChange(next);
+        if (
+          prev.area === next.area &&
+          prev.parish === next.parish &&
+          prev.street === next.street &&
+          prev.houseNumber === next.houseNumber
+        ) return prev;
+        queueMicrotask(() => emitChange(next));
         return next;
       });
     },
@@ -201,12 +280,26 @@ export const LocationField: React.FC<LocationFieldProps> = ({value, onChange}) =
   );
 
   const setQuery = useCallback(
-    (key: 'area' | 'parish' | 'street', v: string) => {
-      setQueries(prev => ({...prev, [key]: v}));
-      updatePart(key, v);
+    (key: 'area' | 'parish' | 'street' | 'houseNumber', v: string) => {
+      setQueries(prev =>
+        prev[key] === v ? prev : {...prev, [key]: v},
+      );
     },
-    [updatePart],
+    [],
   );
+
+  useEffect(() => {
+    if (queries.area !== parts.area) updatePart('area', queries.area);
+  }, [queries.area]);
+  useEffect(() => {
+    if (queries.parish !== parts.parish) updatePart('parish', queries.parish);
+  }, [queries.parish]);
+  useEffect(() => {
+    if (queries.street !== parts.street) updatePart('street', queries.street);
+  }, [queries.street]);
+  useEffect(() => {
+    if (queries.houseNumber !== parts.houseNumber) updatePart('houseNumber', queries.houseNumber);
+  }, [queries.houseNumber]);
 
   const selectAndCommit = useCallback(
     (
@@ -218,7 +311,7 @@ export const LocationField: React.FC<LocationFieldProps> = ({value, onChange}) =
       const value = v.trim();
       if (!value) return;
       if (!list.includes(value)) adder(value);
-      setQueries(prev => ({...prev, [key]: ''}));
+      setQueries(prev => (prev[key] === '' ? prev : {...prev, [key]: ''}));
       updatePart(key, value);
     },
     [updatePart],
@@ -226,7 +319,9 @@ export const LocationField: React.FC<LocationFieldProps> = ({value, onChange}) =
 
   const clearSection = useCallback(
     (key: keyof LocationParts) => {
-      setQueries(prev => ({...prev, [key]: ''}));
+      setQueries(prev =>
+        prev[key] === '' ? prev : {...prev, [key]: ''},
+      );
       updatePart(key, '');
     },
     [updatePart],
@@ -418,9 +513,6 @@ export const LocationField: React.FC<LocationFieldProps> = ({value, onChange}) =
             maxLength={HOUSE_NUMBER_MAX_LENGTH}
           />
         ) : null}
-        <Text style={styles.hintMuted}>
-          支援自動拆分：輸入「佑漢第一街123號」可自動把「123號」分到這裏
-        </Text>
       </View>
     </View>
   );

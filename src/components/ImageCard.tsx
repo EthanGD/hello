@@ -12,11 +12,15 @@ export const ImageCard: React.FC<ImageCardProps> = ({image, onPress}) => {
   return (
     <TouchableOpacity activeOpacity={0.8} style={styles.card} onPress={onPress}>
       <Image
-        source={{uri: `file://${image.filePath}`}}
+        source={{uri: `file://${image.filePath}?v=${image.updatedAt}`}}
         style={styles.image}
         resizeMode="cover"
       />
       <View style={styles.overlay}>
+        <Text style={styles.date}>
+          {formatDate(image.createdAt).split(' ')[0]}
+          {image.hasWatermark ? ' · 已標記' : ''}
+        </Text>
         {image.location ? (
           <Text
             style={styles.locationText}
@@ -33,9 +37,11 @@ export const ImageCard: React.FC<ImageCardProps> = ({image, onPress}) => {
             {image.remark}
           </Text>
         ) : null}
-        <Text style={styles.date}>
-          {formatDate(image.createdAt).split(' ')[0]}
-        </Text>
+        {image.fileName ? (
+          <Text style={styles.fileNameText} numberOfLines={1} ellipsizeMode="middle">
+            📎 {image.fileName}
+          </Text>
+        ) : null}
       </View>
     </TouchableOpacity>
   );
@@ -55,10 +61,11 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    padding: 6,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    padding: 8,
+    backgroundColor: 'rgba(0,0,0,0.25)',
   },
   locationText: {fontSize: 11, color: '#fff', marginBottom: 2},
   remarkText: {fontSize: 11, color: '#fff', lineHeight: 14},
-  date: {position: 'absolute', top: -60, right: 4, fontSize: 10, color: '#fff'},
+  fileNameText: {fontSize: 10, color: 'rgba(255,255,255,0.85)', marginTop: 3},
+  date: {fontSize: 10, color: '#fff', marginBottom: 2},
 });

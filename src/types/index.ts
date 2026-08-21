@@ -12,9 +12,15 @@ export interface ImageMeta {
   directoryId: string;
   fileName: string;
   filePath: string;
+  originFilePath?: string;
+  originFileName?: string;
   thumbnailPath?: string;
   remark?: string;
   location?: string;
+  locationArea?: string;
+  locationParish?: string;
+  locationStreet?: string;
+  locationHouseNumber?: string;
   waterPipeSpec?: string;
   waterPipeQty?: number;
   hasWatermark?: boolean;
@@ -25,7 +31,12 @@ export interface ImageMeta {
 export interface ImageExportItem {
   id: string;
   relativePath: string;
+  originRelativePath?: string;
   location: string;
+  locationArea?: string;
+  locationParish?: string;
+  locationStreet?: string;
+  locationHouseNumber?: string;
   waterPipeSpec?: string;
   waterPipeQty?: number;
   waterPipeText?: string;

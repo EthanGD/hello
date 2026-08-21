@@ -3,5 +3,12 @@
   "compilerOptions": {
     "skipLibCheck": true,
     "types": ["react-native"]
-  }
+  },
+  "exclude": [
+    "index.js",
+    "index.jsx",
+    "babel.config.js",
+    "metro.config.js",
+    "react-native.config.js"
+  ]
 }

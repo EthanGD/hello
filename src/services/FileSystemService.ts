@@ -75,6 +75,7 @@ class FileSystemService {
       if (!exists) {
         await RNFS.mkdir(root);
       }
+      await this._ensureImagesJsonFileIfMissing();
       const legacy = getLegacyPublicRootDir();
       if (Platform.OS === 'android' && legacy) {
         RNFS.exists(legacy)
@@ -96,6 +97,22 @@ class FileSystemService {
     }
   }
 
+  private async _ensureImagesJsonFileIfMissing(): Promise<void> {
+    try {
+      const jsonPath = this.getExportImagesJsonPath();
+      const exists = await RNFS.exists(jsonPath);
+      if (exists) {
+        const stats = await RNFS.stat(jsonPath).catch(() => null as any);
+        if (stats && typeof (stats as any).size === 'number' && (stats as any).size > 0) {
+          return;
+        }
+      }
+      await RNFS.writeFile(jsonPath, JSON.stringify([], null, 2), 'utf8');
+    } catch (err) {
+      void writeCrashLog('WARN', 'FS:ensureImagesJson:write-default', err);
+    }
+  }
+
   private async _copyIfPossible(from: string, to: string): Promise<boolean> {
     try {
       if (!from || !to) return false;
@@ -112,6 +129,113 @@ class FileSystemService {
       return true;
     } catch (e) {
       return false;
+    }
+  }
+
+  async mirrorAllRootToPublicDir(): Promise<{
+    copiedDirs: number;
+    copiedFiles: number;
+    skippedFiles: number;
+    errors: number;
+  }> {
+    const result = {
+      copiedDirs: 0,
+      copiedFiles: 0,
+      skippedFiles: 0,
+      errors: 0,
+    };
+    if (Platform.OS !== 'android') return result;
+    const pub = getLegacyPublicRootDir();
+    if (!pub) return result;
+    const has = await hasAllFilesAccess();
+    if (!has) return result;
+    const root = getAppRootDir();
+    try {
+      const pubExists = await RNFS.exists(pub);
+      if (!pubExists) {
+        try {
+          await RNFS.mkdir(pub);
+          result.copiedDirs++;
+        } catch (e) {
+          void writeCrashLog('ERROR', 'FS:mirror:mkdir-pub', e);
+          result.errors++;
+          return result;
+        }
+      }
+      const rootExists = await RNFS.exists(root);
+      if (!rootExists) return result;
+      const list = await RNFS.readDir(root).catch(() => [] as any[]);
+      if (!list) return result;
+      const queue: Array<{from: string; to: string; rel: string; isDir: boolean}> = [];
+      for (const e of list) {
+        if (String(e.name).startsWith('.')) continue;
+        const rel = e.name;
+        const from = e.path;
+        const to = joinPath(pub, rel);
+        queue.push({from, to, rel, isDir: !!e.isDirectory()});
+      }
+      while (queue.length > 0) {
+        const item = queue.shift()!;
+        try {
+          if (item.isDir) {
+            const destExist = await RNFS.exists(item.to);
+            if (!destExist) {
+              await RNFS.mkdir(item.to);
+              result.copiedDirs++;
+            }
+            const subList = await RNFS.readDir(item.from).catch(() => [] as any[]);
+            for (const se of subList || []) {
+              const sRel = `${item.rel}/${se.name}`;
+              const sFrom = se.path;
+              const sTo = joinPath(pub, sRel);
+              queue.push({from: sFrom, to: sTo, rel: sRel, isDir: !!se.isDirectory()});
+            }
+          } else {
+            const destExist = await RNFS.exists(item.to);
+            if (destExist) {
+              result.skippedFiles++;
+              continue;
+            }
+            await RNFS.copyFile(item.from, item.to);
+            result.copiedFiles++;
+          }
+        } catch (err) {
+          result.errors++;
+          void writeCrashLog('WARN', 'FS:mirror:item-fail', {rel: item.rel, err: (err as any)?.message ?? err});
+        }
+      }
+      try {
+        const jsonFrom = this.getExportImagesJsonPath();
+        const jFromExist = await RNFS.exists(jsonFrom);
+        if (jFromExist) {
+          const jsonRel = this.getRelativePath(jsonFrom);
+          const jsonTo = joinPath(pub, jsonRel);
+          const done = await this._copyIfPossible(jsonFrom, jsonTo);
+          if (done) result.copiedFiles++;
+          else result.skippedFiles++;
+        }
+      } catch {
+        // ignore - images.json 非致命
+      }
+      try {
+        const {crashLogPath} = require('../utils/crashLog') as typeof import('../utils/crashLog');
+        const cf = crashLogPath();
+        const cfExists = await RNFS.exists(cf);
+        if (cfExists) {
+          const cfRel = cf.startsWith(root) ? cf.slice(root.length).replace(/^[\\/]/, '') : 'crashes.log';
+          const cfTo = joinPath(pub, cfRel);
+          const dir = cfTo.split(/[\\/]/).slice(0, -1).join('/');
+          if (dir && !(await RNFS.exists(dir))) await RNFS.mkdir(dir);
+          await RNFS.copyFile(cf, cfTo);
+          result.copiedFiles++;
+        }
+      } catch {
+        // ignore
+      }
+      return result;
+    } catch (err) {
+      void writeCrashLog('ERROR', 'FS:mirrorAll:fatal', err);
+      return result;
     }
   }
 
@@ -277,7 +401,7 @@ class FileSystemService {
       return '';
     }
     if (qty != null && !Number.isNaN(qty) && qty > 0) {
-      return `${cleanSpec} ${qty}條`;
+      return `${cleanSpec} × ${qty} 條`;
     }
     return cleanSpec;
   }
@@ -289,10 +413,20 @@ class FileSystemService {
       meta.waterPipeSpec,
       meta.waterPipeQty,
     );
+    const filePathForOrigin = meta.originFilePath || meta.filePath;
+    const originRelativePath =
+      filePathForOrigin && filePathForOrigin !== meta.filePath
+        ? this.getRelativePath(filePathForOrigin)
+        : undefined;
     return {
       id: meta.id,
       relativePath: this.getRelativePath(meta.filePath),
+      originRelativePath,
       location,
+      locationArea: meta.locationArea,
+      locationParish: meta.locationParish,
+      locationStreet: meta.locationStreet,
+      locationHouseNumber: meta.locationHouseNumber,
       waterPipeSpec: meta.waterPipeSpec,
       waterPipeQty: meta.waterPipeQty,
       waterPipeText,
@@ -316,11 +450,12 @@ class FileSystemService {
       }
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) {
+        void writeCrashLog('WARN', 'FS:loadImageExportIndex:not-array', {jsonPath, type: typeof parsed});
         return [];
       }
       return parsed as ImageExportItem[];
     } catch (err) {
-      console.error('[FS] loadImageExportIndex failed', err);
+      void writeCrashLog('ERROR', 'FS:loadImageExportIndex:failed', err);
       return [];
     }
   }
@@ -333,8 +468,12 @@ class FileSystemService {
       const jsonPath = this.getExportImagesJsonPath();
       const payload = JSON.stringify(items, null, 2);
       await RNFS.writeFile(jsonPath, payload, 'utf8');
+      void Promise.resolve().then(async () => {
+        const rel = this.getRelativePath(jsonPath);
+        await this.maybeSyncToPublicDir(jsonPath, rel).catch(() => undefined);
+      });
     } catch (err) {
-      console.error('[FS] writeImageExportIndex failed', err);
+      void writeCrashLog('ERROR', 'FS:writeImageExportIndex:failed', err);
       throw err;
     }
   }
@@ -352,7 +491,7 @@ class FileSystemService {
       existing.sort((a, b) => b.updatedAt - a.updatedAt);
       await this.writeImageExportIndex(existing);
     } catch (err) {
-      console.error('[FS] upsertImageExportItem failed', err);
+      void writeCrashLog('ERROR', 'FS:upsertImageExportItem:failed', err);
     }
   }
 
@@ -364,7 +503,7 @@ class FileSystemService {
         await this.writeImageExportIndex(next);
       }
     } catch (err) {
-      console.error('[FS] removeImageExportItem failed', err);
+      void writeCrashLog('ERROR', 'FS:removeImageExportItem:failed', err);
     }
   }
 
@@ -395,7 +534,7 @@ class FileSystemService {
       this.maybeSyncDirTreeToPublic(fullPath, safeName).catch(() => undefined);
       return {path: fullPath, node};
     } catch (err) {
-      console.error('[FS] createDirectory failed', err);
+      void writeCrashLog('ERROR', 'FS:createDirectory:failed', err);
       throw err;
     }
   }
@@ -456,7 +595,7 @@ class FileSystemService {
       }).catch(() => undefined);
       return {newPath};
     } catch (err) {
-      console.error('[FS] renameDirectory failed', err);
+      void writeCrashLog('ERROR', 'FS:renameDirectory:failed', err);
       throw err;
     }
   }
@@ -482,7 +621,7 @@ class FileSystemService {
         if (pe) await RNFS.unlink(pubPath).catch(() => undefined);
       }).catch(() => undefined);
     } catch (err) {
-      console.error('[FS] deleteDirectory failed', err);
+      void writeCrashLog('ERROR', 'FS:deleteDirectory:failed', err);
       throw err;
     }
   }
@@ -547,7 +686,7 @@ class FileSystemService {
       await this.maybeSyncToPublicDir(filePath, rel);
       return {fileName, filePath};
     } catch (err) {
-      console.error('[FS] saveImageToDirectory failed', err);
+      void writeCrashLog('ERROR', 'FS:saveImageToDirectory:failed', err);
       throw err;
     }
   }
@@ -573,7 +712,7 @@ class FileSystemService {
         if (pe) await RNFS.unlink(pubPath).catch(() => undefined);
       }).catch(() => undefined);
     } catch (err) {
-      console.error('[FS] deleteImage failed', err);
+      void writeCrashLog('ERROR', 'FS:deleteImage:failed', err);
       throw err;
     }
   }

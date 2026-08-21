@@ -201,21 +201,13 @@ interface AppContextValue {
   updateImageMeta: (
     directoryId: string,
     imageId: string,
-    changes: Partial<
-      Pick<
-        ImageMeta,
-        | 'remark'
-        | 'location'
-        | 'waterPipeSpec'
-        | 'waterPipeQty'
-        | 'hasWatermark'
-      >
-    >,
+    changes: Partial<ImageMeta>,
   ) => Promise<void>;
   replaceImageFilePath: (
     directoryId: string,
     imageId: string,
     newFilePath: string,
+    overrides?: Partial<ImageMeta>,
   ) => Promise<void>;
   deleteImage: (directoryId: string, imageId: string) => Promise<void>;
   getPathBreadcrumb: (directoryId: string | null) => DirectoryNode[];
@@ -437,8 +429,14 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
         directoryId,
         fileName,
         filePath,
+        originFilePath: filePath,
+        originFileName: fileName,
         remark: '',
         location: '',
+        locationArea: '',
+        locationParish: '',
+        locationStreet: '',
+        locationHouseNumber: '',
         waterPipeSpec: undefined,
         waterPipeQty: undefined,
         hasWatermark: false,
@@ -446,7 +444,11 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
         updatedAt: now,
       };
       dispatch({type: 'ADD_IMAGE', payload: meta});
-      fileSystemService.upsertImageExportItem(meta).catch(() => undefined);
+      try {
+        await fileSystemService.upsertImageExportItem(meta);
+      } catch (err) {
+        writeCrashLog('ERROR', 'APP:addImageFromAsset:upsert:fail', err);
+      }
       return meta;
     },
     [state.directories],
@@ -489,17 +491,23 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
     ) => {
       const list = state.images[directoryId] || [];
       const current = list.find(img => img.id === imageId);
+      const merged: ImageMeta | null = current
+        ? {
+            ...current,
+            ...changes,
+            updatedAt: nowTimestamp(),
+          }
+        : null;
       dispatch({
         type: 'UPDATE_IMAGE',
         payload: {id: imageId, directoryId, changes},
       });
-      if (current) {
-        const written: ImageMeta = {
-          ...current,
-          ...changes,
-          updatedAt: nowTimestamp(),
-        };
-        fileSystemService.upsertImageExportItem(written).catch(() => undefined);
+      if (merged) {
+        try {
+          await fileSystemService.upsertImageExportItem(merged);
+        } catch (err) {
+          writeCrashLog('ERROR', 'APP:updateImageMeta:upsert:fail', err);
+        }
       }
     },
     [state.images],
@@ -510,22 +518,31 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
       directoryId: string,
       imageId: string,
       newFilePath: string,
+      overrides?: Partial<ImageMeta>,
     ) => {
       const list = state.images[directoryId] || [];
       const current = list.find(img => img.id === imageId);
+      const merged: ImageMeta | null = current
+        ? {
+            ...current,
+            ...(overrides || {}),
+            filePath: newFilePath,
+            fileName:
+              newFilePath.split(/[\\/]/).pop() || current.fileName,
+            hasWatermark: true,
+            updatedAt: nowTimestamp(),
+          }
+        : null;
       dispatch({
         type: 'REPLACE_IMAGE_FILE_PATH',
         payload: {id: imageId, directoryId, filePath: newFilePath},
       });
-      if (current) {
-        const written: ImageMeta = {
-          ...current,
-          filePath: newFilePath,
-          fileName: newFilePath.split(/[\\/]/).pop() || current.fileName,
-          hasWatermark: true,
-          updatedAt: nowTimestamp(),
-        };
-        fileSystemService.upsertImageExportItem(written).catch(() => undefined);
+      if (merged) {
+        try {
+          await fileSystemService.upsertImageExportItem(merged);
+        } catch (err) {
+          writeCrashLog('ERROR', 'APP:replaceImageFilePath:upsert:fail', err);
+        }
       }
     },
     [state.images],

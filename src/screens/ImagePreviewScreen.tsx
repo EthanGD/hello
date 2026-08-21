@@ -22,6 +22,9 @@ import type {WaterPipeFieldValue} from '../components/WaterPipeField';
 import {CommonRemarkChips} from '../components/CommonRemarkChips';
 import {REMARK_MAX_LENGTH} from '../constants';
 import {formatDate} from '../utils/date';
+import {watermarkService} from '../services/WatermarkService';
+import {writeCrashLog} from '../utils/crashLog';
+import type {ImageMeta} from '../types';
 
 const COLOR_PRIMARY = '#1677ff';
 const COLOR_DANGER = '#ff4d4f';
@@ -40,6 +43,7 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
     state,
     updateImageMeta,
     deleteImage,
+    replaceImageFilePath,
     addLocationArea,
     addLocationParish,
     addLocationStreet,
@@ -74,7 +78,28 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
   useEffect(() => {
     if (image) {
       setRemark(image.remark || '');
-      setLocation(image.location || '');
+      const anyImage = image as any;
+      const hasArea = typeof anyImage.locationArea === 'string' && anyImage.locationArea.trim().length > 0;
+      const hasParish = typeof anyImage.locationParish === 'string' && anyImage.locationParish.trim().length > 0;
+      const hasStreet = typeof anyImage.locationStreet === 'string' && anyImage.locationStreet.trim().length > 0;
+      const hasHouse = typeof anyImage.locationHouseNumber === 'string' && anyImage.locationHouseNumber.trim().length > 0;
+      const nextParts: LocationParts = {
+        area: hasArea ? anyImage.locationArea : '',
+        parish: hasParish ? anyImage.locationParish : '',
+        street: hasStreet ? anyImage.locationStreet : '',
+        houseNumber: hasHouse ? anyImage.locationHouseNumber : '',
+      };
+      if (hasArea || hasParish || hasStreet || hasHouse) {
+        setLocationParts(nextParts);
+        const full =
+          nextParts.area +
+          nextParts.parish +
+          nextParts.street +
+          (nextParts.houseNumber ? `門牌號${nextParts.houseNumber}` : '');
+        setLocation(full);
+      } else {
+        setLocation(image.location || '');
+      }
       setWaterPipe({
         spec: image.waterPipeSpec || '',
         qty: typeof image.waterPipeQty === 'number' ? image.waterPipeQty : null,
@@ -119,27 +144,33 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
     const trimmedParish = locationParts.parish.trim();
     const trimmedStreet = locationParts.street.trim();
     const trimmedHouse = locationParts.houseNumber.trim();
+    const locationFresh =
+      trimmedArea +
+      trimmedParish +
+      trimmedStreet +
+      (trimmedHouse ? `門牌號${trimmedHouse}` : '');
     const trimmedSpec = waterPipe.spec.trim();
     const trimmedRemark = remark.trim();
 
     setSaving(true);
     try {
-      await updateImageMeta(directoryId, imageId, {
-        remark: trimmedRemark || undefined,
-        location: location.trim() || undefined,
-        waterPipeSpec: trimmedSpec || undefined,
+      const finalMeta: Partial<ImageMeta> = {
+        remark: trimmedRemark,
+        location: locationFresh,
+        locationArea: trimmedArea,
+        locationParish: trimmedParish,
+        locationStreet: trimmedStreet,
+        locationHouseNumber: trimmedHouse,
+        waterPipeSpec: trimmedSpec,
         waterPipeQty:
           typeof waterPipe.qty === 'number' && waterPipe.qty > 0
             ? waterPipe.qty
             : undefined,
-      });
+      };
+      await updateImageMeta(directoryId, imageId, finalMeta);
       if (trimmedArea) addLocationArea(trimmedArea);
       if (trimmedParish) addLocationParish(trimmedParish);
       if (trimmedStreet) addLocationStreet(trimmedStreet);
-      if (trimmedHouse) {
-        // 門牌號本身以獨特字串為主，直接追加到街道詞庫方便下次選
-        addLocationStreet(trimmedHouse);
-      }
       if (trimmedSpec) addWaterPipeSpec(trimmedSpec);
       if (trimmedRemark) {
         const lines = trimmedRemark
@@ -150,6 +181,40 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
       }
       setDirty(false);
       Toast.success('已保存');
+      if (locationFresh) {
+        setLocation(locationFresh);
+      }
+      const savedMeta: ImageMeta = {
+        ...image,
+        remark: finalMeta.remark ?? image.remark ?? '',
+        location: finalMeta.location ?? image.location ?? '',
+        locationArea: finalMeta.locationArea ?? image.locationArea ?? '',
+        locationParish: finalMeta.locationParish ?? image.locationParish ?? '',
+        locationStreet: finalMeta.locationStreet ?? image.locationStreet ?? '',
+        locationHouseNumber:
+          finalMeta.locationHouseNumber ?? image.locationHouseNumber ?? '',
+        waterPipeSpec: finalMeta.waterPipeSpec ?? image.waterPipeSpec,
+        waterPipeQty: finalMeta.waterPipeQty ?? image.waterPipeQty,
+        updatedAt: Date.now(),
+      };
+      try {
+        watermarkService
+          .applyWatermarkToImage(savedMeta)
+          .then(newPath => {
+            if (!newPath || typeof newPath !== 'string') return;
+            return replaceImageFilePath(
+              directoryId,
+              image.id,
+              newPath,
+              savedMeta,
+            );
+          })
+          .catch(err =>
+            writeCrashLog('WARN', 'APP:preview:watermark:fail', err),
+          );
+      } catch (err) {
+        writeCrashLog('WARN', 'APP:preview:watermark:init-fail', err);
+      }
     } catch (e: any) {
       Toast.fail(e?.message || '保存失敗');
     } finally {
@@ -159,6 +224,7 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
     image,
     saving,
     updateImageMeta,
+    replaceImageFilePath,
     directoryId,
     imageId,
     remark,
@@ -267,7 +333,7 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
             </View>
           ) : null}
           <Image
-            source={{uri: `file://${image.filePath}`}}
+            source={{uri: `file://${image.filePath}?v=${image.updatedAt}`}}
             style={styles.image}
             resizeMode="contain"
             onLoad={() => setImgReady(true)}
@@ -299,7 +365,14 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
         </View>
 
         <View style={styles.field}>
-          <LocationField value={location} onChange={handleLocationChange} />
+          <LocationField
+            value={location}
+            areaValue={locationParts.area}
+            parishValue={locationParts.parish}
+            streetValue={locationParts.street}
+            houseNumberValue={locationParts.houseNumber}
+            onChange={handleLocationChange}
+          />
         </View>
 
         <View style={styles.field}>

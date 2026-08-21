@@ -92,7 +92,7 @@ export const InputModal: React.FC<InputModalProps> = ({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    backgroundColor: 'rgba(0,0,0,0.28)',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,

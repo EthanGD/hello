@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -27,11 +27,17 @@ import {
   IMAGE_LIST_NUM_COLUMNS,
   ROOT_DIRECTORY_ID,
 } from '../constants';
-import {getAppRootDir, getLegacyPublicRootDir, joinPath} from '../utils/path';
+import {
+  getAppRootDir,
+  getLegacyPublicRootDir,
+  joinPath,
+  toUiFriendlyPath,
+} from '../utils/path';
 import {
   hasAllFilesAccess,
   openAllFilesAccessSettings,
 } from '../utils/permission';
+import {fileSystemService} from '../services/FileSystemService';
 
 export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
   navigation,
@@ -51,7 +57,7 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
     getPathBreadcrumb,
   } = useApp();
 
-  const storagePrimary = useMemo(() => {
+  const storagePrivateAbs = useMemo(() => {
     const root = getAppRootDir();
     if (isRoot) {
       return root;
@@ -60,7 +66,7 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
     return joinPath(root, ...crumbs.map(c => c.name));
   }, [isRoot, currentDirectoryId, getPathBreadcrumb]);
 
-  const storageSecondary = useMemo(() => {
+  const storagePublicAbs = useMemo(() => {
     if (Platform.OS !== 'android') return null;
     const pub = getLegacyPublicRootDir();
     if (!pub) return null;
@@ -69,17 +75,102 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
     return joinPath(pub, ...crumbs.map(c => c.name));
   }, [isRoot, currentDirectoryId, getPathBreadcrumb]);
 
+  const storagePrimaryFriendly = useMemo(
+    () => toUiFriendlyPath(storagePrivateAbs),
+    [storagePrivateAbs],
+  );
+
+  const storageSecondaryFriendly = useMemo(
+    () => (storagePublicAbs ? toUiFriendlyPath(storagePublicAbs) : null),
+    [storagePublicAbs],
+  );
+
   const [publicAccessGranted, setPublicAccessGranted] = useState<boolean | null>(null);
+  const prevGrantedRef = useRef<boolean | null>(null);
   const refreshPublicAccess = useCallback(async () => {
     try {
       const v = await hasAllFilesAccess();
-      setPublicAccessGranted(v);
+      setPublicAccessGranted(prev => {
+        const wasGranted = prevGrantedRef.current;
+        prevGrantedRef.current = v;
+        if (v === true && wasGranted !== true && Platform.OS === 'android') {
+          const ToastAny: any = Toast;
+          try {
+            if (typeof ToastAny.loading === 'function') {
+              ToastAny.loading('正在同步舊圖到內部存儲 › MWRecord…', 0);
+            }
+          } catch {
+            /* ignore */
+          }
+          void Promise.resolve().then(async () => {
+            try {
+              const r = await fileSystemService.mirrorAllRootToPublicDir();
+              try {
+                if (typeof ToastAny.hide === 'function') ToastAny.hide();
+              } catch {
+                /* ignore */
+              }
+              Toast.success(
+                `同步完成：複製 ${r.copiedFiles} 個檔案 / ${r.copiedDirs} 個目錄` +
+                  (r.errors ? `（失敗 ${r.errors}）` : ''),
+              );
+            } catch {
+              try {
+                if (typeof ToastAny.hide === 'function') ToastAny.hide();
+              } catch {
+                /* ignore */
+              }
+              Toast.fail('同步公共目錄失敗');
+            }
+          });
+        }
+        return v;
+      });
     } catch {
+      prevGrantedRef.current = false;
       setPublicAccessGranted(false);
     }
   }, []);
   useEffect(() => {
     if (Platform.OS === 'android') void refreshPublicAccess();
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const sub =
+      Platform.OS === 'android'
+        ? () => {
+            // 用户从设置页返回 app，立即刷新「所有文件访问」状态
+            if (timeoutId) clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => {
+              void refreshPublicAccess();
+            }, 800);
+          }
+        : null;
+    if (Platform.OS === 'android') {
+      try {
+        const {AppState} = require('react-native') as typeof import('react-native');
+        const listener = (s: string) => {
+          if (s === 'active') sub && sub();
+        };
+        AppState.addEventListener('change', listener);
+        const appSub0: any = AppState;
+        const rmListener = (): void => {
+          try {
+            appSub0 && typeof appSub0.removeEventListener === 'function' &&
+              appSub0.removeEventListener('change', listener);
+          } catch {
+            /* ignore */
+          }
+        };
+        return () => {
+          if (timeoutId) clearTimeout(timeoutId);
+          rmListener();
+        };
+      } catch {
+        /* ignore */
+      }
+    }
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, [refreshPublicAccess]);
 
   const openStorageLocation = useCallback(async () => {
@@ -88,7 +179,7 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
         Toast.info('当前平台暂不支持跳转文件管理器');
         return;
       }
-      if (!storageSecondary) {
+      if (!storagePrivateAbs) {
         Toast.info('暂无可浏览目录');
         return;
       }
@@ -110,14 +201,22 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
       }
       const granted = await hasAllFilesAccess();
       setPublicAccessGranted(granted);
+      let absPath = storagePrivateAbs;
+      let hasPublic = false;
+      if (storagePublicAbs) {
+        const exists = await (RNFS as any).exists(storagePublicAbs).catch(() => false);
+        if (granted && exists) {
+          absPath = storagePublicAbs;
+          hasPublic = true;
+        }
+      }
       if (!granted) {
         await openAllFilesAccessSettings();
         Toast.info(
-          '請打開「所有文件訪問」後，再在「我的文件」查看：/storage/emulated/0/MWRecord',
+          `請打開「所有文件訪問」後，在「我的文件」查看：${storagePrimaryFriendly.primary}`,
         );
         return;
       }
-      const absPath = storageSecondary;
       try {
         const action = 'android.intent.action.VIEW';
         const extras = [
@@ -130,7 +229,7 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
         ];
         try {
           await Linking.sendIntent(action, extras);
-          Toast.success('已调起文件浏览器');
+          Toast.success(hasPublic ? '已跳轉公共可見目錄' : '已调起文件浏览器');
           return;
         } catch (sendErr) {
           console.warn('[Dir] Linking.sendIntent VIEW failed:', sendErr);
@@ -149,7 +248,13 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
     } catch (err) {
       Toast.fail('无法打开目录：' + String((err as any)?.message ?? err));
     }
-  }, [storageSecondary]);
+  }, [
+    storagePrivateAbs,
+    storagePublicAbs,
+    storagePrimaryFriendly,
+    openAllFilesAccessSettings,
+    hasAllFilesAccess,
+  ]);
 
   const goToAllFilesAccess = useCallback(async () => {
     await openAllFilesAccessSettings();
@@ -432,30 +537,58 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
           <Icon name="right" size={14} color="#8c8c8c" style={styles.storageChevron} />
         </View>
         <View style={styles.storagePaths}>
-          <Text style={styles.storagePathBadge}>應用私有</Text>
+          <Text style={styles.storagePathBadge}>用戶可見</Text>
           <Text
-            style={styles.storagePath}
+            style={[
+              styles.storagePath,
+              styles.storagePathPrimaryUi,
+            ]}
             numberOfLines={0}
             ellipsizeMode="tail">
-            {storagePrimary}
+            {storagePrimaryFriendly.primary}
           </Text>
         </View>
-        {storageSecondary ? (
+        <View style={[styles.storagePaths, styles.storagePathSecondary]}>
+          <Text
+            style={[
+              styles.storagePathBadge,
+              styles.storagePathBadgeTech,
+            ]}>
+            技術路徑
+          </Text>
+          <Text
+            style={[styles.storagePath, styles.storagePathTech]}
+            numberOfLines={0}
+            ellipsizeMode="tail">
+            {storagePrimaryFriendly.secondary}
+          </Text>
+        </View>
+        {storageSecondaryFriendly ? (
           <View style={[styles.storagePaths, styles.storagePathSecondary]}>
             <Text style={[styles.storagePathBadge, styles.storagePathBadgePub]}>
-              公共可見
+              公共根目錄
             </Text>
             <Text
               style={[styles.storagePath, styles.storagePathPub]}
               numberOfLines={0}
               ellipsizeMode="tail">
-              {storageSecondary}
+              {storageSecondaryFriendly.primary}
+              {'\n'}
+              <Text style={{color: '#8c8c8c', fontWeight: '400'}}>
+                {publicAccessGranted === true
+                  ? '（已授權，自動同步所有圖片到此文件夾副本）'
+                  : publicAccessGranted === false
+                    ? '（未授權，點擊右側開啟即可看到此文件夾）'
+                    : '（點擊右側開啟後才能看見此文件夾）'}
+              </Text>
             </Text>
             <TouchableOpacity onPress={goToAllFilesAccess}>
               <Text style={styles.storageLinkBtn}>
-                {publicAccessGranted === null || !publicAccessGranted
-                  ? '開啟所有文件訪問'
-                  : '已開啟'}
+                {publicAccessGranted === true
+                  ? '已開啟 ✔'
+                  : publicAccessGranted === null
+                    ? '點我開啟'
+                    : '點我重新開啟'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -610,12 +743,26 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   storagePathBadgePub: {backgroundColor: '#d46b08'},
+  storagePathBadgeTech: {backgroundColor: '#595959'},
   storagePath: {
     flex: 1,
     flexShrink: 1,
     fontSize: 12,
     color: '#262626',
     lineHeight: 18,
+  },
+  storagePathPrimaryUi: {
+    color: '#1677ff',
+    fontWeight: '700',
+    fontSize: 13,
+    lineHeight: 19,
+    textDecorationLine: 'underline',
+  },
+  storagePathTech: {
+    color: '#8c8c8c',
+    fontSize: 10,
+    lineHeight: 14,
+    fontFamily: Platform.OS === 'android' ? 'monospace' : undefined,
   },
   storagePathPub: {color: '#5c2b00'},
   storageLinkBtn: {

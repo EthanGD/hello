@@ -1,0 +1,2 @@
+.\gradlew assembleRelease --refresh-dependencies
+./gradlew assembleRelease

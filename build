@@ -1,2 +1,5 @@
 .\gradlew assembleRelease --refresh-dependencies
 ./gradlew assembleRelease
+npm i -D "@bam.tech/react-native-make"
+npx react-native set-icon --path "./assets/images.png" --platform android
+npx react-native set-icon --path "./assets/images.png"

@@ -11,7 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import {Icon, Toast} from '@ant-design/react-native';
+import {Toast} from '@ant-design/react-native';
 import {useApp} from '../context/AppContext';
 import type {ImagePreviewScreenProps} from '../navigation/types';
 import {ConfirmDialog} from '../components/ConfirmDialog';
@@ -267,9 +267,6 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
             disabled={deleting}
             activeOpacity={0.8}>
             <View style={styles.hBtnInner}>
-              <View style={styles.hBtnIconWrap}>
-                <Icon name="delete" color={COLOR_DANGER} size={15} />
-              </View>
               <Text style={styles.hBtnDangerText}>刪除</Text>
             </View>
           </TouchableOpacity>
@@ -285,18 +282,13 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
               {saving ? (
                 <ActivityIndicator size="small" color={COLOR_PRIMARY} />
               ) : (
-                <>
-                  <View style={styles.hBtnIconWrap}>
-                    <Icon name="check-circle" color={COLOR_PRIMARY} size={15} />
-                  </View>
-                  <Text
-                    style={[
-                      styles.hBtnPrimaryText,
-                      (!dirty || saving || deleting) && styles.hBtnTextDisabled,
-                    ]}>
-                    保存
-                  </Text>
-                </>
+                <Text
+                  style={[
+                    styles.hBtnPrimaryText,
+                    (!dirty || saving || deleting) && styles.hBtnTextDisabled,
+                  ]}>
+                  保存
+                </Text>
               )}
             </View>
           </TouchableOpacity>
@@ -328,7 +320,6 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
           ) : null}
           {imgError ? (
             <View style={styles.imgError}>
-              <Icon name="exclamation-circle" size={48} color="#ff4d4f" />
               <Text style={styles.imgErrorText}>圖片加載失敗</Text>
             </View>
           ) : null}
@@ -343,19 +334,11 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
 
         <View style={styles.metaRow}>
           <View style={styles.metaTag}>
-            <Icon name="clock-circle" size={12} color="#888" />
-            <Text style={styles.metaText}>
-              {' '}
-              建立：{formatDate(image.createdAt)}
-            </Text>
+            <Text style={styles.metaText}>建立：{formatDate(image.createdAt)}</Text>
           </View>
           {image.updatedAt !== image.createdAt ? (
             <View style={styles.metaTag}>
-              <Icon name="edit" size={12} color="#888" />
-              <Text style={styles.metaText}>
-                {' '}
-                更新：{formatDate(image.updatedAt)}
-              </Text>
+              <Text style={styles.metaText}>更新：{formatDate(image.updatedAt)}</Text>
             </View>
           ) : null}
         </View>
@@ -376,9 +359,7 @@ export const ImagePreviewScreen: React.FC<ImagePreviewScreenProps> = ({
         </View>
 
         <View style={styles.field}>
-          <Text style={styles.fieldLabel}>
-            <Icon name="form" size={14} color="#1677ff" /> 備註
-          </Text>
+          <Text style={styles.fieldLabel}>備註</Text>
           <CommonRemarkChips onAppend={appendRemark} />
           <TextInput
             style={styles.multiInput}
@@ -464,13 +445,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  hBtnIconWrap: {
-    width: 16,
-    height: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 3,
   },
   hBtnDangerText: {
     color: COLOR_DANGER,

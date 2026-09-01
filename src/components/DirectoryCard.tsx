@@ -1,6 +1,5 @@
 import React from 'react';
 import {StyleSheet, Text, TouchableOpacity, View} from 'react-native';
-import {Icon} from '@ant-design/react-native';
 import type {DirectoryNode} from '../types';
 
 interface DirectoryCardProps {
@@ -24,14 +23,12 @@ export const DirectoryCard: React.FC<DirectoryCardProps> = ({
       onLongPress={onLongPress}
       delayLongPress={400}>
       <View style={styles.iconWrap}>
-        <Icon name="folder" size={40} color="#F5A623" />
+        <View style={styles.folderPlaceholder} />
       </View>
       <Text style={styles.name} numberOfLines={2} ellipsizeMode="tail">
         {directory.name}
       </Text>
-      <Text style={styles.meta}>
-        <Icon name="picture" size={12} /> {imageCount}
-      </Text>
+      <Text style={styles.meta}>圖片 {imageCount}</Text>
     </TouchableOpacity>
   );
 };
@@ -57,6 +54,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 8,
+  },
+  folderPlaceholder: {
+    width: 40,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: '#F5A623',
   },
   name: {
     fontSize: 14,

@@ -11,7 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import {ActionSheet, Button, Icon, Toast} from '@ant-design/react-native';
+import {ActionSheet, Button, Toast} from '@ant-design/react-native';
 import RNFS from 'react-native-fs';
 import {useApp} from '../context/AppContext';
 import type {DirectoryScreenProps} from '../navigation/types';
@@ -505,8 +505,7 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
           <TouchableOpacity
             onPress={() => navigation.pop(breadcrumb.length)}
             style={styles.breadcrumbItem}>
-            <Icon name="home" size={14} />
-            <Text style={styles.breadcrumbText}> 首頁</Text>
+            <Text style={styles.breadcrumbText}>首頁</Text>
           </TouchableOpacity>
           {breadcrumb.map((n, i) => (
             <View key={n.id} style={styles.breadcrumbRow}>
@@ -532,9 +531,8 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
         activeOpacity={0.65}
         onPress={openStorageLocation}>
         <View style={styles.storageHeaderRow}>
-          <Icon name="folder" size={16} color="#1677ff" />
           <Text style={styles.storageLabel}>存儲位置：</Text>
-          <Icon name="right" size={14} color="#8c8c8c" style={styles.storageChevron} />
+          <Text style={styles.storageChevron}>查看</Text>
         </View>
         <View style={styles.storagePaths}>
           <Text style={styles.storagePathBadge}>用戶可見</Text>
@@ -597,7 +595,6 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
 
       {isEmpty ? (
         <EmptyState
-          icon={isRoot ? 'folder' : 'picture'}
           title={isRoot ? '還沒有任何目錄' : '此目錄暫無內容'}
           description={
             isRoot
@@ -635,7 +632,6 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
               disabled={busy}
               style={styles.fabBtnFull}>
               <View style={styles.fabBtnContent}>
-                <Icon name="folder-add" color="#fff" />
                 <Text style={styles.fabBtnTextPrimary}>新建目錄（長按目錄可重命名）</Text>
               </View>
             </Button>
@@ -646,7 +642,6 @@ export const DirectoryScreen: React.FC<DirectoryScreenProps> = ({
               disabled={busy}
               style={styles.fabBtnFull}>
               <View style={styles.fabBtnContent}>
-                <Icon name="plus" color="#fff" />
                 <Text style={styles.fabBtnTextPrimary}>添加圖片（點擊圖片編輯詳情）</Text>
               </View>
             </Button>
@@ -721,7 +716,6 @@ const styles = StyleSheet.create({
     color: '#1677ff',
     fontWeight: '600',
     flex: 1,
-    marginLeft: 6,
   },
   storagePaths: {
     flexDirection: 'row',
@@ -781,6 +775,8 @@ const styles = StyleSheet.create({
   },
   storageChevron: {
     marginLeft: 6,
+    fontSize: 12,
+    color: '#8c8c8c',
   },
   listContent: {paddingBottom: 140, paddingTop: 8},
   sectionTitleWrap: {paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6},
@@ -814,6 +810,5 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 15,
     fontWeight: '600',
-    marginLeft: 6,
   },
 });
